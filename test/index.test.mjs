@@ -128,6 +128,17 @@ test('injected clock handles exact timeout and N plus one without report time', 
   assert.equal('time' in late, false);
 });
 
+test('timeout inside attribution emits no partial known aggregates', () => {
+  const input = trace(80);
+  input.routes.push({ id: '/next', startMs: 140, endMs: 220 });
+  let tick = 0;
+  const report = analyze(input, { timeoutMs: 1, now: () => [0, 0, 2][Math.min(tick++, 2)] });
+  assert.equal(report.status, 'incomplete');
+  assert.equal(report.findings.some((finding) => finding.ruleId === 'analysis-timeout'), true);
+  assert.deepEqual(report.byRoute, []);
+  assert.deepEqual(report.byInteraction, []);
+});
+
 test('script aggregates use UTF-16 ordering and reject invisible names', () => {
   const input = trace(80);
   input.tasks.push({ startMs: 200, durationMs: 50, script: '/Z.js' });

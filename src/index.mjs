@@ -23,6 +23,7 @@ const time = (value) => typeof value === 'number' && Number.isFinite(value)
 const codeUnit = (a, b) => a === b ? 0 : a < b ? -1 : 1;
 const bucketSort = (a, b) => a.id === null ? (b.id === null ? 0 : 1)
   : b.id === null ? -1 : codeUnit(a.id, b.id);
+class DeadlineExceeded extends Error {}
 
 export function exitCodeFor(report) {
   return report.status === 'pass' ? 0 : report.status === 'fail' ? 1 : 2;
@@ -35,7 +36,7 @@ export function incompleteReport(message = 'The named trace could not be evaluat
     longTasks: [], byRoute: [], byScript: [], byInteraction: [] };
 }
 
-function distribute(start, end, windows, buckets) {
+function distribute(start, end, windows, buckets, now, started, timeoutMs) {
   const points = [start, end];
   for (const window of windows) {
     if (window.startMs > start && window.startMs < end) points.push(window.startMs);
@@ -44,6 +45,7 @@ function distribute(start, end, windows, buckets) {
   points.sort((a, b) => a - b);
   let unknown = 0;
   for (let i = 0; i < points.length - 1; i += 1) {
+    if (now() - started > timeoutMs) throw new DeadlineExceeded();
     const from = points[i];
     const to = points[i + 1];
     if (to <= from) continue;
@@ -53,6 +55,10 @@ function distribute(start, end, windows, buckets) {
     if (id === null) unknown += to - from;
   }
   return unknown;
+}
+
+function mergeBuckets(target, source) {
+  for (const [id, duration] of source) target.set(id, (target.get(id) ?? 0) + duration);
 }
 
 export function analyze(document, options = {}) {
@@ -151,8 +157,23 @@ export function analyze(document, options = {}) {
     if (task.durationMs < 50) continue;
     add('long-task', pointer, 'A saved main-thread task blocked for at least 50 ms.');
     const end = task.startMs + task.durationMs;
-    const unknownRoute = distribute(task.startMs, end, usableRoutes, routeBuckets);
-    const unknownInteraction = distribute(task.startMs, end, usableInteractions, interactionBuckets);
+    const taskRoutes = new Map();
+    const taskInteractions = new Map();
+    let unknownRoute;
+    let unknownInteraction;
+    try {
+      unknownRoute = distribute(task.startMs, end, usableRoutes, taskRoutes, now, started, timeoutMs);
+      unknownInteraction = distribute(task.startMs, end, usableInteractions, taskInteractions, now, started, timeoutMs);
+    } catch (error) {
+      if (!(error instanceof DeadlineExceeded)) throw error;
+      add('analysis-timeout', pointer, 'The analysis time limit was exceeded.');
+      longTasks.push({ inputIndex: i, startMs: task.startMs, durationMs: task.durationMs,
+        script: task.script ?? null, functionName: task.functionName ?? null,
+        routeUnknownMs: null, interactionUnknownMs: null });
+      return finish();
+    }
+    mergeBuckets(routeBuckets, taskRoutes);
+    mergeBuckets(interactionBuckets, taskInteractions);
     const script = task.script ?? null;
     scriptBuckets.set(script, (scriptBuckets.get(script) ?? 0) + task.durationMs);
     if (unknownRoute > 0) add('unknown-route', pointer, 'Some task duration has no unique route attribution.');

@@ -1,13 +1,19 @@
 {
   "name": "long-task-analyzer",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Find long tasks and associate them with script, route and interaction timing.",
   "type": "module",
+  "bin": {
+    "long-task-analyzer": "./bin/long-task-analyzer.mjs"
+  },
+  "exports": "./src/index.mjs",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test"
+    "lint": "node --check src/index.mjs && node --check src/json.mjs && node --check src/write-guard.mjs && node --check bin/long-task-analyzer.mjs",
+    "test": "node --test",
+    "check": "npm run lint && npm test"
   },
   "license": "MIT",
   "repository": {

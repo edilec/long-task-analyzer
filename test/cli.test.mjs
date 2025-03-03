@@ -113,3 +113,32 @@ test('CLI confines reads and enforces input byte limit at N and N plus one', () 
   assert.equal(escaped.status, 2);
   assert.equal(JSON.parse(escaped.stdout).status, 'incomplete');
 });
+
+test('CLI task, window, and work limits are wired to analysis', () => {
+  const root = temp();
+  const input = structuredClone(fixture);
+  input.tasks.push({ ...input.tasks[0], startMs: 200 });
+  writeFileSync(join(root, 'trace.json'), JSON.stringify(input));
+  const task = run(root, '--input', 'trace.json', '--max-tasks', '1', '--json');
+  assert.equal(task.status, 2);
+  assert.equal(JSON.parse(task.stdout).findings[0].ruleId, 'task-limit');
+  const window = run(root, '--input', 'trace.json', '--max-windows', '1', '--json');
+  assert.equal(window.status, 2);
+  assert.equal(JSON.parse(window.stdout).findings[0].ruleId, 'window-limit');
+  const work = run(root, '--input', 'trace.json', '--max-attribution-pairs', '3', '--json');
+  assert.equal(work.status, 2);
+  assert.equal(JSON.parse(work.stdout).findings[0].ruleId, 'work-limit');
+});
+
+test('duplicate and rounded trace evidence cannot silently pass the CLI', () => {
+  const root = temp();
+  const json = JSON.stringify(fixture);
+  writeFileSync(join(root, 'trace.json'), json.replace('"durationMs":49.999', '"durationMs":80,"durationMs":49.999'));
+  const duplicate = run(root, '--input', 'trace.json', '--json');
+  assert.equal(duplicate.status, 2);
+  assert.equal(JSON.parse(duplicate.stdout).status, 'incomplete');
+  writeFileSync(join(root, 'trace.json'), json.replace('"durationMs":49.999', '"durationMs":49.999999999999999999'));
+  const rounded = run(root, '--input', 'trace.json', '--json');
+  assert.equal(rounded.status, 2);
+  assert.equal(JSON.parse(rounded.stdout).status, 'incomplete');
+});
