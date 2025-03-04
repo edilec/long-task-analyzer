@@ -159,3 +159,40 @@ test('invalid route window leaves known blocking interval visible but route unkn
   assert.equal(report.findings.some((finding) => finding.ruleId === 'long-task'), true);
   assert.deepEqual(report.byRoute, [{ id: null, durationMs: 80 }]);
 });
+
+test('decimal-equal task and window endpoints attribute fully without a phantom gap', () => {
+  const input = { schemaVersion: 1,
+    tasks: [{ startMs: 0.1, durationMs: 50.2, script: '/bundle.js' }],
+    routes: [{ id: '/route', startMs: 0.1, endMs: 50.3 }],
+    interactions: [{ id: 'tap', startMs: 0.1, endMs: 50.3 }],
+  };
+  const report = analyze(input);
+  assert.equal(report.status, 'fail');
+  assert.deepEqual(report.byRoute, [{ id: '/route', durationMs: 50.2 }]);
+  assert.deepEqual(report.byInteraction, [{ id: 'tap', durationMs: 50.2 }]);
+  assert.equal(report.longTasks[0].routeUnknownMs, 0);
+  assert.equal(report.longTasks[0].interactionUnknownMs, 0);
+});
+
+test('a real one-microsecond gap remains unknown, not silently snapped closed', () => {
+  const input = { schemaVersion: 1,
+    tasks: [{ startMs: 0.1, durationMs: 50.2, script: '/bundle.js' }],
+    routes: [{ id: '/route', startMs: 0.1, endMs: 50.299 }],
+    interactions: [{ id: 'tap', startMs: 0.1, endMs: 50.3 }],
+  };
+  const report = analyze(input);
+  assert.equal(report.status, 'incomplete');
+  assert.deepEqual(report.byRoute, [
+    { id: '/route', durationMs: 50.199 }, { id: null, durationMs: 0.001 },
+  ]);
+  assert.equal(report.longTasks[0].routeUnknownMs, 0.001);
+});
+
+test('finer-than-microsecond times are incomplete rather than rounded into coverage', () => {
+  const input = trace(80);
+  input.routes[0].endMs = 180.0001;
+  const report = analyze(input);
+  assert.equal(report.status, 'incomplete');
+  assert.equal(report.findings.some((finding) => finding.ruleId === 'invalid-evidence'), true);
+  assert.deepEqual(report.byRoute, [{ id: null, durationMs: 80 }]);
+});

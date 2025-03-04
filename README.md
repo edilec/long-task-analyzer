@@ -30,8 +30,11 @@ report on stdout and exits 2; no task is claimed as analyzed in that report.
 
 Input is UTF-8 JSON with `schemaVersion: 1`, nonempty `tasks`, and optional
 `routes` and `interactions` arrays. It is **not** an arbitrary Chrome trace
-parser. All times are nonnegative milliseconds. The finite task start plus
-duration must stay within the JavaScript safe-number range.
+parser. All times are nonnegative milliseconds with at most three fractional
+decimal places (microsecond precision). Times are evaluated as exact integer
+microseconds; finer precision is incomplete, never rounded into a matching
+window. Each converted time and task endpoint must stay within the JavaScript
+safe-integer microsecond range.
 
 | Array | Required item fields | Optional item fields |
 | --- | --- | --- |
