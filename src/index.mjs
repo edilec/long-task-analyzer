@@ -90,7 +90,14 @@ export function analyze(document, options = {}) {
       || /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Default_Ignorable_Code_Point}]/u.test(file)) {
     throw new TypeError('Invalid report file label.');
   }
-  const started = now();
+  let lastClock = -Infinity;
+  const readClock = () => {
+    const reading = now();
+    if (!Number.isFinite(reading) || reading < lastClock) throw new TypeError('Invalid analysis clock.');
+    lastClock = reading;
+    return reading;
+  };
+  const started = readClock();
   const findings = [];
   const longTasks = [];
   const routeBuckets = new Map();
@@ -158,7 +165,7 @@ export function analyze(document, options = {}) {
   const usableRoutes = routeTainted ? [] : compiledRoutes;
   const usableInteractions = interactionTainted ? [] : compiledInteractions;
   for (let i = 0; i < document.tasks.length; i += 1) {
-    if (now() - started > timeoutMs) {
+    if (readClock() - started > timeoutMs) {
       add('analysis-timeout', '/tasks', 'The analysis time limit was exceeded.');
       return finish();
     }
@@ -184,8 +191,8 @@ export function analyze(document, options = {}) {
     let unknownRoute;
     let unknownInteraction;
     try {
-      unknownRoute = distribute(startUs, end, usableRoutes, taskRoutes, now, started, timeoutMs);
-      unknownInteraction = distribute(startUs, end, usableInteractions, taskInteractions, now, started, timeoutMs);
+      unknownRoute = distribute(startUs, end, usableRoutes, taskRoutes, readClock, started, timeoutMs);
+      unknownInteraction = distribute(startUs, end, usableInteractions, taskInteractions, readClock, started, timeoutMs);
     } catch (error) {
       if (!(error instanceof DeadlineExceeded)) throw error;
       add('analysis-timeout', pointer, 'The analysis time limit was exceeded.');

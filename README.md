@@ -90,7 +90,9 @@ The work estimate is `tasks × (routes² + interactions²)`, bounding the
 window-partition algorithm before it runs. All limit overruns are incomplete,
 not truncated passes. Input must resolve within the real root. Duplicate JSON
 keys, malformed UTF-8, and numeric tokens rounded by JavaScript conversion
-are refused rather than silently reinterpreted.
+are refused rather than silently reinterpreted. The library accepts an
+injected `now` clock for deterministic timeouts; every reading must be finite
+and nondecreasing, or analysis rejects the clock instead of certifying a pass.
 
 | Exit | Meaning | Stdout |
 | ---: | --- | --- |

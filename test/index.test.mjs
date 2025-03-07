@@ -196,3 +196,13 @@ test('finer-than-microsecond times are incomplete rather than rounded into cover
   assert.equal(report.findings.some((finding) => finding.ruleId === 'invalid-evidence'), true);
   assert.deepEqual(report.byRoute, [{ id: null, durationMs: 80 }]);
 });
+
+test('nonfinite or backward injected clock readings cannot certify a trace', () => {
+  for (const reading of [NaN, Infinity, -Infinity]) {
+    assert.throws(() => analyze(trace(), { now: () => reading }), TypeError);
+  }
+  let tick = 0;
+  assert.throws(() => analyze(trace(), { now: () => [10, 9][Math.min(tick++, 1)] }), TypeError);
+  tick = 0;
+  assert.throws(() => analyze(trace(80), { now: () => [0, 0, NaN][Math.min(tick++, 2)] }), TypeError);
+});
