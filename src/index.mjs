@@ -10,6 +10,7 @@ const RULES = Object.freeze({
   'unknown-route': 'warning',
   'unknown-script': 'warning',
   'unknown-interaction': 'warning',
+  'aggregate-unrepresentable': 'warning',
 });
 const DEFAULTS = Object.freeze({ maxTasks: 100000, maxWindows: 10000,
   maxAttributionPairs: 1000000, timeoutMs: 2000 });
@@ -74,7 +75,7 @@ function distribute(start, end, windows, buckets, now, started, timeoutMs) {
 }
 
 function mergeBuckets(target, source) {
-  for (const [id, duration] of source) target.set(id, (target.get(id) ?? 0) + duration);
+  for (const [id, duration] of source) target.set(id, (target.get(id) ?? 0n) + BigInt(duration));
 }
 
 export function analyze(document, options = {}) {
@@ -110,18 +111,42 @@ export function analyze(document, options = {}) {
     if (RULES[ruleId] === 'warning') incomplete = true;
   };
   const finish = () => {
+    let unrepresentable = false;
+    const renderDuration = (durationUs) => {
+      if (durationUs > BigInt(Number.MAX_SAFE_INTEGER)) {
+        unrepresentable = true;
+        return null;
+      }
+      const units = Number(durationUs);
+      const milliseconds = units / 1000;
+      if (micros(milliseconds) !== units) {
+        unrepresentable = true;
+        return null;
+      }
+      return milliseconds;
+    };
+    const buckets = (map) => [...map].map(([id, durationUs]) => ({ id, durationMs: renderDuration(durationUs) })).sort(bucketSort);
+    const byRoute = buckets(routeBuckets);
+    const byScript = buckets(scriptBuckets);
+    const byInteraction = buckets(interactionBuckets);
+    const renderedTasks = longTasks.map(({ inputIndex, routeUnknownUs, interactionUnknownUs, ...task }) => ({
+      inputIndex, ...task,
+      routeUnknownMs: routeUnknownUs === null ? null : renderDuration(BigInt(routeUnknownUs)),
+      interactionUnknownMs: interactionUnknownUs === null ? null : renderDuration(BigInt(interactionUnknownUs)),
+    }));
+    if (unrepresentable) {
+      add('aggregate-unrepresentable', '/tasks', 'A duration cannot be represented exactly in report milliseconds.');
+    }
     findings.sort((a, b) => codeUnit(a.location.file, b.location.file)
       || codeUnit(a.location.pointer, b.location.pointer) || codeUnit(a.ruleId, b.ruleId));
-    longTasks.sort((a, b) => a.startMs - b.startMs || a.inputIndex - b.inputIndex);
-    const buckets = (map) => [...map].map(([id, durationUs]) => ({ id, durationMs: durationUs / 1000 })).sort(bucketSort);
+    renderedTasks.sort((a, b) => a.startMs - b.startMs || a.inputIndex - b.inputIndex);
     return { schemaVersion: '1', tool: TOOL_ID,
       status: incomplete ? 'incomplete' : findings.some((finding) => finding.severity === 'error') ? 'fail' : 'pass',
       summary: { checked, errors: findings.filter((f) => f.severity === 'error').length,
         warnings: findings.filter((f) => f.severity === 'warning').length, longTasks: longTasks.length },
       findings,
-      longTasks: longTasks.map(({ inputIndex, ...task }) => task),
-      byRoute: buckets(routeBuckets), byScript: buckets(scriptBuckets),
-      byInteraction: buckets(interactionBuckets) };
+      longTasks: renderedTasks.map(({ inputIndex, ...task }) => task),
+      byRoute, byScript, byInteraction };
   };
   if (!objectKeys(document, ['schemaVersion', 'tasks'], ['routes', 'interactions'])
       || document.schemaVersion !== 1 || !Array.isArray(document.tasks) || document.tasks.length === 0
@@ -198,19 +223,19 @@ export function analyze(document, options = {}) {
       add('analysis-timeout', pointer, 'The analysis time limit was exceeded.');
       longTasks.push({ inputIndex: i, startMs: task.startMs, durationMs: task.durationMs,
         script: task.script ?? null, functionName: task.functionName ?? null,
-        routeUnknownMs: null, interactionUnknownMs: null });
+        routeUnknownUs: null, interactionUnknownUs: null });
       return finish();
     }
     mergeBuckets(routeBuckets, taskRoutes);
     mergeBuckets(interactionBuckets, taskInteractions);
     const script = task.script ?? null;
-    scriptBuckets.set(script, (scriptBuckets.get(script) ?? 0) + durationUs);
+    scriptBuckets.set(script, (scriptBuckets.get(script) ?? 0n) + BigInt(durationUs));
     if (unknownRoute > 0) add('unknown-route', pointer, 'Some task duration has no unique route attribution.');
     if (script === null) add('unknown-script', pointer, 'The task has no saved script attribution.');
     if (unknownInteraction > 0) add('unknown-interaction', pointer, 'Some task duration has no unique interaction attribution.');
     longTasks.push({ inputIndex: i, startMs: task.startMs, durationMs: task.durationMs,
       script, functionName: task.functionName ?? null,
-      routeUnknownMs: unknownRoute / 1000, interactionUnknownMs: unknownInteraction / 1000 });
+      routeUnknownUs: unknownRoute, interactionUnknownUs: unknownInteraction });
   }
   return finish();
 }

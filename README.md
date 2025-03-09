@@ -74,6 +74,7 @@ known IDs by UTF-16 code unit, then the unknown bucket.
 | `window-limit` | warning | Too many route and interaction windows; incomplete. |
 | `work-limit` | warning | Attribution comparison bound exceeded; incomplete. |
 | `analysis-timeout` | warning | Analysis time limit exceeded; incomplete. |
+| `aggregate-unrepresentable` | warning | A duration cannot be rendered exactly as numeric milliseconds; incomplete. |
 
 The report envelope has `schemaVersion: "1"`, `tool`, `status`, `summary`,
 `findings`, `longTasks`, and `byRoute`/`byScript`/`byInteraction` arrays.
@@ -93,6 +94,12 @@ keys, malformed UTF-8, and numeric tokens rounded by JavaScript conversion
 are refused rather than silently reinterpreted. The library accepts an
 injected `now` clock for deterministic timeouts; every reading must be finite
 and nondecreasing, or analysis rejects the clock instead of certifying a pass.
+
+Aggregate duration buckets are summed exactly in integer microseconds. If a
+total cannot be expressed faithfully as a JSON millisecond number, that
+bucket's `durationMs` is `null`, an `aggregate-unrepresentable` warning names
+`/tasks`, and the run is incomplete. Known long-task findings and the checked
+count remain visible; a rounded total is never presented as measured time.
 
 | Exit | Meaning | Stdout |
 | ---: | --- | --- |

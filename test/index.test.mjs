@@ -206,3 +206,46 @@ test('nonfinite or backward injected clock readings cannot certify a trace', () 
   tick = 0;
   assert.throws(() => analyze(trace(80), { now: () => [0, 0, NaN][Math.min(tick++, 2)] }), TypeError);
 });
+
+test('aggregate millisecond output accepts an exact boundary and refuses one lost microsecond', () => {
+  const firstMs = 8796093022158;
+  assert.equal(firstMs.toString(), '8796093022158');
+  assert.equal((50.001).toString(), '50.001');
+  assert.equal(BigInt(firstMs) * 1000n + 50001n, 8796093022208001n);
+  const input = { schemaVersion: 1,
+    tasks: [{ startMs: 0, durationMs: firstMs, script: '/bundle.js' },
+      { startMs: 0, durationMs: 50, script: '/bundle.js' }],
+    routes: [{ id: '/route', startMs: 0, endMs: firstMs }],
+    interactions: [{ id: 'tap', startMs: 0, endMs: firstMs }],
+  };
+  const exact = analyze(input, { now: () => 0 });
+  assert.equal(exact.status, 'fail');
+  assert.deepEqual(exact.byRoute, [{ id: '/route', durationMs: 8796093022208 }]);
+  input.tasks[1].durationMs = 50.001;
+  const lost = analyze(input, { now: () => 0 });
+  assert.equal(lost.status, 'incomplete');
+  assert.deepEqual(lost.byRoute, [{ id: '/route', durationMs: null }]);
+  assert.deepEqual(lost.byScript, [{ id: '/bundle.js', durationMs: null }]);
+  assert.deepEqual(lost.byInteraction, [{ id: 'tap', durationMs: null }]);
+  assert.equal(lost.findings.some((finding) => finding.ruleId === 'aggregate-unrepresentable'), true);
+});
+
+test('aggregate overflow never rounds a one-microsecond excess into a known total', () => {
+  const largeMs = 100000000000;
+  assert.equal((largeMs + 0.001).toString(), '100000000000.001');
+  assert.equal(100n * 100000000000000n + 100000000000001n, 10100000000000001n);
+  const input = { schemaVersion: 1,
+    tasks: Array.from({ length: 101 }, (_, i) => ({ startMs: 0,
+      durationMs: i === 100 ? largeMs + 0.001 : largeMs, script: '/x.js' })),
+    routes: [{ id: '/route', startMs: 0, endMs: largeMs + 0.001 }],
+    interactions: [{ id: 'tap', startMs: 0, endMs: largeMs + 0.001 }],
+  };
+  const report = analyze(input, { now: () => 0 });
+  assert.equal(report.status, 'incomplete');
+  assert.equal(report.summary.checked, 101);
+  assert.equal(report.summary.errors, 101);
+  assert.deepEqual(report.byRoute, [{ id: '/route', durationMs: null }]);
+  assert.deepEqual(report.byScript, [{ id: '/x.js', durationMs: null }]);
+  assert.deepEqual(report.byInteraction, [{ id: 'tap', durationMs: null }]);
+  assert.equal(report.findings.some((finding) => finding.ruleId === 'aggregate-unrepresentable'), true);
+});
