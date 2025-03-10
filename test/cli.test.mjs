@@ -54,6 +54,22 @@ test('CLI invalid config is empty stdout while unreadable named trace is incompl
   assert.equal(invisible.stdout, '');
 });
 
+test('CLI missing or file root is configuration, unlike a missing named trace', () => {
+  const root = temp();
+  const input = join(root, 'trace.json');
+  writeFileSync(input, JSON.stringify(fixture));
+  assert.equal(run(root, '--input', input, '--json').status, 0);
+  for (const invalidRoot of [join(root, 'absent-root'), input]) {
+    const invalid = run(invalidRoot, '--input', input, '--json');
+    assert.equal(invalid.status, 2);
+    assert.equal(invalid.stdout, '');
+    assert.equal(invalid.stderr, 'Invalid configuration or execution failure.\n');
+  }
+  const absentInput = run(root, '--input', 'absent-trace.json', '--json');
+  assert.equal(absentInput.status, 2);
+  assert.equal(JSON.parse(absentInput.stdout).status, 'incomplete');
+});
+
 test('CLI help is explicit and has no report side effect', () => {
   const result = spawnSync(process.execPath, [bin, '--help'], { encoding: 'utf8' });
   assert.equal(result.status, 0);

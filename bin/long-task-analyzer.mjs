@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { writeFile, realpath } from 'node:fs/promises';
+import { writeFile, realpath, stat } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { analyze, exitCodeFor, incompleteReport } from '../src/index.mjs';
 import { readBoundedJson } from '../src/json.mjs';
@@ -66,6 +66,7 @@ async function main() {
   }
   const { root: rootName, input: inputName, report: reportName, jsonOnly, limits } = parseArgs(args);
   const root = resolve(rootName);
+  if (!(await stat(root)).isDirectory()) throw new TypeError('Invalid root directory.');
   const input = resolve(root, inputName);
   let report;
   try {
