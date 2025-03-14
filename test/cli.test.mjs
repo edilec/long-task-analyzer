@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, symlinkSync, linkSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, symlinkSync, linkSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -94,6 +94,38 @@ test('CLI safe report writes stdout bytes and refuses three alias classes', () =
     assert.equal(result.status, 2, name);
     assert.equal(JSON.parse(result.stdout).status, 'incomplete');
     assert.deepEqual(readFileSync(input), original);
+  }
+});
+
+test('filesystem root permits safe trace reports while refusing input aliases', () => {
+  const folder = temp();
+  try {
+    const input = join(folder, 'trace.json');
+    const reportFile = join(folder, 'report.json');
+    writeFileSync(input, JSON.stringify(fixture));
+    const original = readFileSync(input);
+    const baseline = run('/', '--input', input, '--json');
+    assert.equal(baseline.status, 0);
+    const safe = run('/', '--input', input, '--report', reportFile, '--json');
+    assert.equal(safe.status, 0);
+    assert.equal(safe.stdout, baseline.stdout);
+    assert.equal(readFileSync(reportFile, 'utf8'), safe.stdout);
+    symlinkSync(input, join(folder, 'symlink.json'));
+    linkSync(input, join(folder, 'hard.json'));
+    for (const name of ['symlink.json', 'hard.json']) {
+      const refused = run('/', '--input', input, '--report', join(folder, name), '--json');
+      assert.equal(refused.status, 2, name);
+      assert.equal(JSON.parse(refused.stdout).status, 'incomplete');
+      assert.deepEqual(readFileSync(input), original);
+    }
+    const future = join(folder, 'future.json');
+    symlinkSync(future, join(folder, 'missing.json'));
+    const dangling = run('/', '--input', join(folder, 'missing.json'), '--report', future, '--json');
+    assert.equal(dangling.status, 2);
+    assert.equal(JSON.parse(dangling.stdout).status, 'incomplete');
+    assert.equal(existsSync(future), false);
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
   }
 });
 
