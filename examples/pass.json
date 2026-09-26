@@ -1,0 +1,1 @@
+{"schemaVersion":1,"tasks":[{"startMs":100,"durationMs":49.999,"script":"/bundle.js"}],"routes":[{"id":"/catalog","startMs":0,"endMs":300}],"interactions":[{"id":"tap-add","startMs":90,"endMs":250}]}

@@ -1,0 +1,192 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, readFileSync, symlinkSync, linkSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+const bin = new URL('../bin/long-task-analyzer.mjs', import.meta.url).pathname;
+const fixture = { schemaVersion: 1,
+  tasks: [{ startMs: 100, durationMs: 49.999, script: '/bundle.js' }],
+  routes: [{ id: '/catalog', startMs: 0, endMs: 300 }],
+  interactions: [{ id: 'tap-add', startMs: 90, endMs: 250 }],
+};
+const temp = () => mkdtempSync(join(tmpdir(), 'long-task-analyzer-'));
+const run = (root, ...args) => spawnSync(process.execPath, [bin, '--root', root, ...args], { encoding: 'utf8' });
+
+test('CLI short-task good case emits JSON and fixed human summary', () => {
+  const root = temp();
+  writeFileSync(join(root, 'trace.json'), JSON.stringify(fixture));
+  const result = run(root, '--input', 'trace.json');
+  assert.equal(result.status, 0);
+  assert.equal(JSON.parse(result.stdout).status, 'pass');
+  assert.equal(result.stderr, 'Long task analyzer: PASS; 0 findings.\n');
+  const json = run(root, '--input', 'trace.json', '--json');
+  assert.equal(json.status, 0);
+  assert.equal(json.stderr, '');
+  assert.equal(json.stdout, result.stdout);
+});
+
+test('CLI synthetic blocking interval identifies task without fabricated function name', () => {
+  const root = temp();
+  const input = structuredClone(fixture);
+  input.tasks[0].durationMs = 80;
+  writeFileSync(join(root, 'trace.json'), JSON.stringify(input));
+  const result = run(root, '--input', 'trace.json', '--json');
+  const report = JSON.parse(result.stdout);
+  assert.equal(result.status, 1);
+  assert.equal(report.status, 'fail');
+  assert.equal(report.longTasks[0].functionName, null);
+  assert.deepEqual(report.byRoute, [{ id: '/catalog', durationMs: 80 }]);
+});
+
+test('CLI invalid config is empty stdout while unreadable named trace is incomplete', () => {
+  const root = temp();
+  const bad = run(root, '--input', 'missing.json', '--json', '--bad-option');
+  assert.equal(bad.status, 2);
+  assert.equal(bad.stdout, '');
+  assert.equal(bad.stderr, 'Invalid configuration or execution failure.\n');
+  const missing = run(root, '--input', 'missing.json', '--json');
+  assert.equal(missing.status, 2);
+  assert.equal(JSON.parse(missing.stdout).status, 'incomplete');
+  const invisible = run(root, '--input', '\u034f', '--json');
+  assert.equal(invisible.status, 2);
+  assert.equal(invisible.stdout, '');
+});
+
+test('CLI missing or file root is configuration, unlike a missing named trace', () => {
+  const root = temp();
+  const input = join(root, 'trace.json');
+  writeFileSync(input, JSON.stringify(fixture));
+  assert.equal(run(root, '--input', input, '--json').status, 0);
+  for (const invalidRoot of [join(root, 'absent-root'), input]) {
+    const invalid = run(invalidRoot, '--input', input, '--json');
+    assert.equal(invalid.status, 2);
+    assert.equal(invalid.stdout, '');
+    assert.equal(invalid.stderr, 'Invalid configuration or execution failure.\n');
+  }
+  const absentInput = run(root, '--input', 'absent-trace.json', '--json');
+  assert.equal(absentInput.status, 2);
+  assert.equal(JSON.parse(absentInput.stdout).status, 'incomplete');
+});
+
+test('CLI help is explicit and has no report side effect', () => {
+  const result = spawnSync(process.execPath, [bin, '--help'], { encoding: 'utf8' });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /^Usage: long-task-analyzer /u);
+  assert.equal(result.stderr, '');
+});
+
+test('CLI safe report writes stdout bytes and refuses three alias classes', () => {
+  const root = temp();
+  const outside = temp();
+  const input = join(root, 'trace.json');
+  writeFileSync(input, JSON.stringify(fixture));
+  const original = readFileSync(input);
+  const safe = run(root, '--input', 'trace.json', '--report', 'report.json', '--json');
+  assert.equal(safe.status, 0);
+  assert.equal(readFileSync(join(root, 'report.json'), 'utf8'), safe.stdout);
+  symlinkSync(input, join(root, 'symlink.json'));
+  symlinkSync(outside, join(root, 'linked-parent'));
+  linkSync(input, join(root, 'hard.json'));
+  for (const name of ['symlink.json', 'linked-parent/out.json', 'hard.json']) {
+    const result = run(root, '--input', 'trace.json', '--report', name, '--json');
+    assert.equal(result.status, 2, name);
+    assert.equal(JSON.parse(result.stdout).status, 'incomplete');
+    assert.deepEqual(readFileSync(input), original);
+  }
+});
+
+test('filesystem root permits safe trace reports while refusing input aliases', () => {
+  const folder = temp();
+  try {
+    const input = join(folder, 'trace.json');
+    const reportFile = join(folder, 'report.json');
+    writeFileSync(input, JSON.stringify(fixture));
+    const original = readFileSync(input);
+    const baseline = run('/', '--input', input, '--json');
+    assert.equal(baseline.status, 0);
+    const safe = run('/', '--input', input, '--report', reportFile, '--json');
+    assert.equal(safe.status, 0);
+    assert.equal(safe.stdout, baseline.stdout);
+    assert.equal(readFileSync(reportFile, 'utf8'), safe.stdout);
+    symlinkSync(input, join(folder, 'symlink.json'));
+    linkSync(input, join(folder, 'hard.json'));
+    for (const name of ['symlink.json', 'hard.json']) {
+      const refused = run('/', '--input', input, '--report', join(folder, name), '--json');
+      assert.equal(refused.status, 2, name);
+      assert.equal(JSON.parse(refused.stdout).status, 'incomplete');
+      assert.deepEqual(readFileSync(input), original);
+    }
+    const future = join(folder, 'future.json');
+    symlinkSync(future, join(folder, 'missing.json'));
+    const dangling = run('/', '--input', join(folder, 'missing.json'), '--report', future, '--json');
+    assert.equal(dangling.status, 2);
+    assert.equal(JSON.parse(dangling.stdout).status, 'incomplete');
+    assert.equal(existsSync(future), false);
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+test('CLI dangling input alias cannot become a report, distinct missing input can', () => {
+  const root = temp();
+  symlinkSync(join(root, 'future.json'), join(root, 'missing.json'));
+  const alias = run(root, '--input', 'missing.json', '--report', 'future.json', '--json');
+  assert.equal(alias.status, 2);
+  assert.equal(existsSync(join(root, 'future.json')), false);
+  symlinkSync(join(root, 'future-two.json'), join(root, 'middle.json'));
+  symlinkSync(join(root, 'middle.json'), join(root, 'missing-two.json'));
+  const multi = run(root, '--input', 'missing-two.json', '--report', 'future-two.json', '--json');
+  assert.equal(multi.status, 2);
+  assert.equal(existsSync(join(root, 'future-two.json')), false);
+  const distinct = run(root, '--input', 'absent.json', '--report', 'safe.json', '--json');
+  assert.equal(distinct.status, 2);
+  assert.equal(readFileSync(join(root, 'safe.json'), 'utf8'), distinct.stdout);
+});
+
+test('CLI confines reads and enforces input byte limit at N and N plus one', () => {
+  const root = temp();
+  const outside = temp();
+  const json = JSON.stringify(fixture);
+  writeFileSync(join(root, 'trace.json'), json);
+  const exact = run(root, '--input', 'trace.json', '--max-bytes', String(Buffer.byteLength(json)), '--json');
+  assert.equal(exact.status, 0);
+  const over = run(root, '--input', 'trace.json', '--max-bytes', String(Buffer.byteLength(json) - 1), '--json');
+  assert.equal(over.status, 2);
+  assert.equal(JSON.parse(over.stdout).status, 'incomplete');
+  writeFileSync(join(outside, 'trace.json'), json);
+  symlinkSync(join(outside, 'trace.json'), join(root, 'escape.json'));
+  const escaped = run(root, '--input', 'escape.json', '--json');
+  assert.equal(escaped.status, 2);
+  assert.equal(JSON.parse(escaped.stdout).status, 'incomplete');
+});
+
+test('CLI task, window, and work limits are wired to analysis', () => {
+  const root = temp();
+  const input = structuredClone(fixture);
+  input.tasks.push({ ...input.tasks[0], startMs: 200 });
+  writeFileSync(join(root, 'trace.json'), JSON.stringify(input));
+  const task = run(root, '--input', 'trace.json', '--max-tasks', '1', '--json');
+  assert.equal(task.status, 2);
+  assert.equal(JSON.parse(task.stdout).findings[0].ruleId, 'task-limit');
+  const window = run(root, '--input', 'trace.json', '--max-windows', '1', '--json');
+  assert.equal(window.status, 2);
+  assert.equal(JSON.parse(window.stdout).findings[0].ruleId, 'window-limit');
+  const work = run(root, '--input', 'trace.json', '--max-attribution-pairs', '3', '--json');
+  assert.equal(work.status, 2);
+  assert.equal(JSON.parse(work.stdout).findings[0].ruleId, 'work-limit');
+});
+
+test('duplicate and rounded trace evidence cannot silently pass the CLI', () => {
+  const root = temp();
+  const json = JSON.stringify(fixture);
+  writeFileSync(join(root, 'trace.json'), json.replace('"durationMs":49.999', '"durationMs":80,"durationMs":49.999'));
+  const duplicate = run(root, '--input', 'trace.json', '--json');
+  assert.equal(duplicate.status, 2);
+  assert.equal(JSON.parse(duplicate.stdout).status, 'incomplete');
+  writeFileSync(join(root, 'trace.json'), json.replace('"durationMs":49.999', '"durationMs":49.999999999999999999'));
+  const rounded = run(root, '--input', 'trace.json', '--json');
+  assert.equal(rounded.status, 2);
+  assert.equal(JSON.parse(rounded.stdout).status, 'incomplete');
+});
